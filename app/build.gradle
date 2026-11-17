@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.accmgr.phone'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.accmgr.phone"
+        minSdk 26
+        targetSdk 34
+        versionCode Integer.parseInt((project.findProperty("vc") ?: "1").toString())
+        versionName "2.0." + (project.findProperty("vc") ?: "1")
+    }
+    signingConfigs {
+        stable {
+            storeFile file("keystore.p12")
+            storePassword "myproject"
+            keyAlias "key"
+            keyPassword "myproject"
+            storeType "pkcs12"
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.stable
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
