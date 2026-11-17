@@ -7,7 +7,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.accmgr.phone"
+        applicationId "com.accounts.vault"
         minSdk 26
         targetSdk 34
         versionCode Integer.parseInt((project.findProperty("vc") ?: "1").toString())

@@ -49,7 +49,7 @@
         <!-- Lets the app share backup / app files through the system share sheet -->
         <provider
             android:name=".ShareProvider"
-            android:authorities="com.accmgr.phone.share"
+            android:authorities="${applicationId}.share"
             android:exported="false"
             android:grantUriPermissions="true" />
     </application>

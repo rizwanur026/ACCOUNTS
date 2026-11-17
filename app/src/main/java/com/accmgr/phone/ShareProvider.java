@@ -13,7 +13,6 @@ import java.io.FileNotFoundException;
 
 /** Hands files from cache/share to the system share sheet (no extra libraries needed). */
 public class ShareProvider extends ContentProvider {
-    static final String AUTH = "com.accmgr.phone.share";
 
     static File dir(android.content.Context c) {
         File d = new File(c.getCacheDir(), "share");
@@ -21,8 +20,9 @@ public class ShareProvider extends ContentProvider {
         return d;
     }
 
-    static Uri uri(String name) {
-        return new Uri.Builder().scheme("content").authority(AUTH).appendPath(name).build();
+    static Uri uri(android.content.Context c, String name) {
+        return new Uri.Builder().scheme("content").authority(c.getPackageName() + ".share")
+                .appendPath(name).build();
     }
 
     private File resolve(Uri u) throws FileNotFoundException {

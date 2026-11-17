@@ -380,7 +380,7 @@ public class SettingsActivity extends android.app.Activity {
     }
 
     private void share(File f, String mime, String chooserTitle) {
-        Uri u = ShareProvider.uri(f.getName());
+        Uri u = ShareProvider.uri(this, f.getName());
         Intent s = new Intent(Intent.ACTION_SEND);
         s.setType(mime);
         s.putExtra(Intent.EXTRA_STREAM, u);
