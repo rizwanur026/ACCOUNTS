@@ -4,7 +4,12 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.app.Dialog;
+import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.widget.Switch;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -32,11 +37,20 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 public class BrowserActivity extends Activity {
     private static final int MAX_TABS = 8;
+    private static final int REQ_EXT_FILE = 51;
+    private static final int MAX_SCRIPT = 1000000;
 
     private static class Tab {
         WebView web;
@@ -108,6 +122,8 @@ public class BrowserActivity extends Activity {
         tabRow = new LinearLayout(this);
         hs.addView(tabRow);
         tabBar.addView(hs, Ui.lp(this, 0, -2, 1f, 0, 0, 8, 0));
+        ImageView extBtn = Ui.iconButton(this, R.drawable.ic_ext, 36);
+        tabBar.addView(extBtn, Ui.lp(this, dp(36), dp(36), 0f, 0, 0, 8, 0));
         ImageView plus = Ui.iconButton(this, R.drawable.ic_add, 36);
         tabBar.addView(plus);
         top.addView(tabBar, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
@@ -150,6 +166,7 @@ public class BrowserActivity extends Activity {
                 if (cur != null) cur.web.loadUrl(u);
             });
         });
+        extBtn.setOnClickListener(v -> showExtensions());
         plus.setOnClickListener(v -> {
             if (tabs.size() >= MAX_TABS) {
                 Toast.makeText(this, "Up to " + MAX_TABS + " tabs", Toast.LENGTH_SHORT).show();
@@ -200,6 +217,7 @@ public class BrowserActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView v, String u) {
+                if (!closing) Extensions.run(BrowserActivity.this, accId, v, u);
                 if (saveHistory && !closing && u != null
                         && (u.startsWith("http://") || u.startsWith("https://"))) {
                     Store.addHistory(BrowserActivity.this, accId, v.getTitle(), u);
@@ -363,6 +381,187 @@ public class BrowserActivity extends Activity {
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(ClipData.newPlainText("link", link));
         Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
+    }
+
+    // ---------- extensions (per account) ----------
+    private void showExtensions() {
+        if (!Store.validId(accId)) return;
+        final List<JSONObject> list = Extensions.list(this, accId);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        if (list.isEmpty()) {
+            body.addView(Ui.tv(this, "No extensions yet for this account.", 14, Ui.MUTED, false));
+        }
+        final Dialog[] ref = new Dialog[1];
+        for (final JSONObject e : list) {
+            LinearLayout r = new LinearLayout(this);
+            r.setGravity(Gravity.CENTER_VERTICAL);
+            r.setBackground(Ui.card(this, Ui.PANEL2, 12));
+            r.setPadding(dp(12), dp(8), dp(8), dp(8));
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            TextView nm = Ui.tv(this, e.optString("name"), 14, Ui.FG, true);
+            nm.setSingleLine(true);
+            nm.setEllipsize(TextUtils.TruncateAt.END);
+            String m = e.optString("match").trim();
+            TextView ms = Ui.tv(this, m.isEmpty() || m.equals("*") ? "All sites" : m.replace("\n", ", "),
+                    11, Ui.MUTED, false);
+            ms.setSingleLine(true);
+            ms.setEllipsize(TextUtils.TruncateAt.END);
+            col.addView(nm);
+            col.addView(ms);
+            r.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+            Switch sw = new Switch(this);
+            sw.setChecked(e.optBoolean("on", true));
+            sw.setThumbTintList(android.content.res.ColorStateList.valueOf(0xFFFFFFFF));
+            sw.setTrackTintList(new android.content.res.ColorStateList(
+                    new int[][]{{android.R.attr.state_checked}, {}},
+                    new int[]{Ui.ACCENT, 0xFF3A3A50}));
+            final String eid = e.optString("id");
+            sw.setOnCheckedChangeListener((v, on) -> {
+                try {
+                    Extensions.setOn(this, accId, eid, on);
+                } catch (Exception ex) {
+                    Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+            r.addView(sw);
+            TextView del = Ui.tv(this, "\u00D7", 22, Ui.DANGER, false);
+            del.setPadding(dp(12), 0, dp(8), 0);
+            del.setOnClickListener(v -> {
+                try {
+                    Extensions.remove(this, accId, eid);
+                } catch (Exception ex) {
+                    Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+                if (ref[0] != null) ref[0].dismiss();
+                showExtensions();
+            });
+            r.addView(del);
+            body.addView(r, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 8));
+        }
+        ref[0] = Ui.dialog(this, "Extensions \u00B7 " + accName,
+                "JavaScript user scripts that run only in this account. Chrome Web Store extensions (.crx) can't run on Android. Add scripts you trust only. On/off changes apply from the next page load.",
+                body, "Close", "Add", false, () -> {
+                    addMenu();
+                    return true;
+                });
+    }
+
+    private void addMenu() {
+        Ui.menu(this, "Add extension", new String[]{"Paste code", "Import from file", "Add from link"}, -1, i -> {
+            if (i == 0) scriptForm(null);
+            else if (i == 1) {
+                Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                it.addCategory(Intent.CATEGORY_OPENABLE);
+                it.setType("*/*");
+                startActivityForResult(it, REQ_EXT_FILE);
+            } else linkForm();
+        });
+    }
+
+    private void scriptForm(String prefill) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        final EditText name = Ui.field(this, "Name (optional)");
+        final EditText match = Ui.field(this, "Sites, e.g. *://mail.google.com/*  (empty = all)");
+        match.setTextSize(13);
+        final EditText code = Ui.field(this, "JavaScript code");
+        code.setSingleLine(false);
+        code.setMinLines(6);
+        code.setMaxLines(10);
+        code.setGravity(Gravity.TOP);
+        code.setTypeface(Typeface.MONOSPACE);
+        code.setTextSize(12);
+        code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if (prefill != null) {
+            code.setText(prefill);
+            String[] m = Extensions.meta(prefill);
+            name.setText(m[0]);
+            match.setText(m[1]);
+        }
+        box.addView(name, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
+        box.addView(match, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
+        box.addView(code);
+        Ui.dialog(this, "New extension", null, box, "Cancel", "Save", false, () -> {
+            String src = code.getText().toString();
+            if (src.trim().isEmpty()) {
+                code.setError("Paste the code");
+                return false;
+            }
+            String[] m = Extensions.meta(src);
+            String nm = name.getText().toString().trim();
+            if (nm.isEmpty()) nm = m[0].isEmpty() ? "Script" : m[0];
+            String mt = match.getText().toString().trim();
+            if (mt.isEmpty()) mt = m[1];
+            try {
+                Extensions.add(this, accId, nm, mt, src);
+                if (cur != null) cur.web.reload();
+                Toast.makeText(this, "Extension added", Toast.LENGTH_SHORT).show();
+            } catch (Exception ex) {
+                Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_LONG).show();
+            }
+            return true;
+        });
+    }
+
+    private void linkForm() {
+        final EditText link = Ui.field(this, "https://\u2026/script.user.js");
+        link.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        Ui.dialog(this, "Add from link", "Paste the direct link to a .js or .user.js file.", link,
+                "Cancel", "Download", false, () -> {
+                    final String u = link.getText().toString().trim();
+                    if (!u.startsWith("https://")) {
+                        link.setError("Use an https:// link");
+                        return false;
+                    }
+                    fetchScript(u);
+                    return true;
+                });
+    }
+
+    private void fetchScript(final String u) {
+        Toast.makeText(this, "Downloading\u2026", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                HttpURLConnection h = (HttpURLConnection) new URL(u).openConnection();
+                h.setConnectTimeout(10000);
+                h.setReadTimeout(20000);
+                if (h.getResponseCode() != 200) throw new Exception("HTTP " + h.getResponseCode());
+                final String text = readLimited(h.getInputStream());
+                runOnUiThread(() -> scriptForm(text));
+            } catch (final Exception ex) {
+                runOnUiThread(() -> Ui.message(this, "Download failed", String.valueOf(ex.getMessage())));
+            }
+        }).start();
+    }
+
+    private String readLimited(InputStream in) throws Exception {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            b.write(buf, 0, n);
+            if (b.size() > MAX_SCRIPT) throw new Exception("File is too large");
+        }
+        in.close();
+        return new String(b.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req != REQ_EXT_FILE || res != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        new Thread(() -> {
+            try {
+                final String text = readLimited(getContentResolver().openInputStream(uri));
+                runOnUiThread(() -> scriptForm(text));
+            } catch (final Exception ex) {
+                runOnUiThread(() -> Ui.message(this, "Couldn't read file", String.valueOf(ex.getMessage())));
+            }
+        }).start();
     }
 
     // ---------- navigation / close ----------

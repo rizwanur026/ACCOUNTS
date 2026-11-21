@@ -30,7 +30,8 @@ import java.util.Locale;
 public class SettingsActivity extends android.app.Activity {
     private static final int REQ_IMPORT = 41;
     private SharedPreferences sp;
-    private TextView cacheSub, dataSub, updStatus;
+    private TextView cacheSub, updStatus;
+    private LinearLayout usageBox;
     private EditText ghRepo, ghToken;
     private String updAssetUrl;
     private Button installBtn;
@@ -61,16 +62,19 @@ public class SettingsActivity extends android.app.Activity {
         head.addView(Ui.tv(this, "Settings", 24, Ui.FG, true), Ui.lp(this, -2, -2, 0f, 14, 0, 0, 0));
         root.addView(head, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 8));
 
+        // ----- Data usage -----
+        root.addView(section("DATA USAGE"));
+        usageBox = card();
+        usageBox.setPadding(dp(16), dp(14), dp(16), dp(14));
+        usageBox.addView(Ui.tv(this, "Measuring\u2026", 14, Ui.MUTED, false));
+        root.addView(usageBox);
+
         // ----- Storage -----
         root.addView(section("STORAGE"));
         LinearLayout st = card();
         View cacheRow = row("Clear cache", "Calculating\u2026", v -> clearCache());
         cacheSub = (TextView) cacheRow.getTag();
         st.addView(cacheRow);
-        st.addView(divider());
-        View dataRow = row("Saved data on this phone", "Calculating\u2026", null);
-        dataSub = (TextView) dataRow.getTag();
-        st.addView(dataRow);
         st.addView(divider());
         st.addView(row("Clear all browsing history", "Removes the history log of every account", v ->
                 Ui.confirm(this, "Clear all history?", "The history of every account will be deleted. Logins stay saved.",
@@ -250,12 +254,69 @@ public class SettingsActivity extends android.app.Activity {
     private void refreshSizes() {
         final boolean web = !Store.browserRunning(this) && sp.getString("pending_id", null) == null;
         new Thread(() -> {
-            final long c = Store.cacheSize(this, web), d = Store.totalDataSize(this);
+            final long c = Store.cacheSize(this, web);
+            final Store.Usage u = Store.usage(this);
             runOnUiThread(() -> {
                 cacheSub.setText(Ui.size(c) + " of temporary files");
-                dataSub.setText(Ui.size(d) + " \u00B7 logins and history");
+                showUsage(u);
             });
         }).start();
+    }
+
+    private void legend(int color, String name, long size) {
+        LinearLayout r = new LinearLayout(this);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        View dot = new View(this);
+        dot.setBackground(Ui.rounded(this, color, 5));
+        r.addView(dot, new LinearLayout.LayoutParams(dp(10), dp(10)));
+        TextView n = Ui.tv(this, name, 13, Ui.FG, false);
+        r.addView(n, Ui.lp(this, 0, -2, 1f, 10, 0, 8, 0));
+        r.addView(Ui.tv(this, Ui.size(size), 13, Ui.MUTED, true));
+        usageBox.addView(r, Ui.lp(this, -1, -2, 0f, 0, 5, 0, 5));
+    }
+
+    private void showUsage(Store.Usage u) {
+        usageBox.removeAllViews();
+        usageBox.addView(Ui.tv(this, "Total data on this phone", 12, Ui.MUTED, false));
+        usageBox.addView(Ui.tv(this, Ui.size(u.total), 28, Ui.FG, true));
+        long[] v = {u.sessions, u.history, u.ext, u.cache, u.other};
+        int[] col = {Ui.ACCENT, Ui.ACCENT_B, Ui.GREEN, Ui.WARN, 0xFF5A5A72};
+        String[] nm = {"Accounts & saved logins", "Browsing history", "Extensions",
+                "Cache (safe to clear)", "Other (browser engine, system)"};
+        LinearLayout bar = new LinearLayout(this);
+        bar.setBackground(Ui.rounded(this, Ui.BORDER, 4));
+        bar.setClipToOutline(true);
+        for (int i = 0; i < v.length; i++) {
+            if (v[i] <= 0) continue;
+            View seg = new View(this);
+            seg.setBackgroundColor(col[i]);
+            bar.addView(seg, new LinearLayout.LayoutParams(0, dp(8), (float) v[i]));
+        }
+        usageBox.addView(bar, Ui.lp(this, -1, dp(8), 0f, 0, 10, 0, 8));
+        for (int i = 0; i < v.length; i++) legend(col[i], nm[i], v[i]);
+        View line = new View(this);
+        line.setBackgroundColor(Ui.BORDER);
+        usageBox.addView(line, Ui.lp(this, -1, 1, 0f, 0, 8, 0, 8));
+        usageBox.addView(Ui.tv(this, "App file (APK): " + Ui.size(u.apk), 12, Ui.MUTED, false));
+        if (!u.names.isEmpty()) {
+            TextView h = Ui.tv(this, "PER ACCOUNT", 11, Ui.MUTED, true);
+            h.setLetterSpacing(0.12f);
+            usageBox.addView(h, Ui.lp(this, -2, -2, 0f, 0, 14, 0, 4));
+            for (int i = 0; i < u.names.size(); i++) {
+                LinearLayout r = new LinearLayout(this);
+                r.setGravity(Gravity.CENTER_VERTICAL);
+                TextView n = Ui.tv(this, u.names.get(i), 13, Ui.FG, false);
+                n.setSingleLine(true);
+                n.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                r.addView(n, new LinearLayout.LayoutParams(0, -2, 1f));
+                r.addView(Ui.tv(this, Ui.size(u.sizes.get(i)), 13, Ui.MUTED, true));
+                usageBox.addView(r, Ui.lp(this, -1, -2, 0f, 0, 4, 0, 4));
+            }
+        }
+        TextView note = Ui.tv(this, "Saved logins are stored compressed. While a browser is open, its live data shows under \"Other\". Phone App info also counts the app file.",
+                11, Ui.MUTED, false);
+        note.setLineSpacing(0, 1.15f);
+        usageBox.addView(note, Ui.lp(this, -1, -2, 0f, 0, 12, 0, 0));
     }
 
     private void clearCache() {

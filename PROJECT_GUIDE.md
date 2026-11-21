@@ -7,6 +7,7 @@ Standalone Android app. No PC, no server, no Tailscale.
   - MainActivity     account list, search, create/edit/delete, open
   - BrowserActivity  tabs, address bar, history button, "Save & close"
   - SettingsActivity cache, history, privacy, backup/share/import, updates, erase all
+  - Extensions       per-account JavaScript user scripts (injected after page load)
   - Store            all data: accounts, saved logins, history, cache, backup (encrypted)
   - Ui               theme, buttons, dialogs
   - ShareProvider    lets the app share backup / APK through the share sheet
@@ -18,6 +19,7 @@ Standalone Android app. No PC, no server, no Tailscale.
 - accounts.json            list of accounts (filesDir)
 - sessions/<id>.zip        saved login/web data per account (filesDir)
 - history/<id>.json        browsing history per account (filesDir)
+- extensions/<id>.json     per-account extensions (filesDir)
 - Opening an account: its zip is restored into the WebView, the browser runs in a separate process.
 - Save & close: WebView data is zipped back into the account, then the WebView is wiped.
 - Clear cache never touches logins. Cache folders are never saved inside sessions.
