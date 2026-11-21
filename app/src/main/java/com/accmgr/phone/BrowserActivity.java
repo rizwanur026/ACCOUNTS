@@ -62,9 +62,6 @@ public class BrowserActivity extends Activity {
     private EditText url;
     private ProgressBar progress;
     private boolean closing = false;
-    private volatile String lastUrl = "";
-    private volatile List<JSONObject> exts = new ArrayList<>();
-    private TextView addBar;
     private boolean saveHistory = true;
     private String accId, accName;
 
@@ -77,7 +74,6 @@ public class BrowserActivity extends Activity {
         accName = getIntent().getStringExtra("name");
         String email = getIntent().getStringExtra("email");
         saveHistory = getIntent().getBooleanExtra("history", true) && Store.validId(accId);
-        if (Store.validId(accId)) exts = Extensions.list(this, accId);
 
         getWindow().setStatusBarColor(Ui.PANEL);
         getWindow().setNavigationBarColor(Ui.BG);
@@ -124,8 +120,6 @@ public class BrowserActivity extends Activity {
         tabRow = new LinearLayout(this);
         hs.addView(tabRow);
         tabBar.addView(hs, Ui.lp(this, 0, -2, 1f, 0, 0, 8, 0));
-        ImageView extBtn = Ui.iconButton(this, R.drawable.ic_ext, 36);
-        tabBar.addView(extBtn, Ui.lp(this, dp(36), dp(36), 0f, 0, 0, 8, 0));
         ImageView plus = Ui.iconButton(this, R.drawable.ic_add, 36);
         tabBar.addView(plus);
         top.addView(tabBar, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
@@ -143,18 +137,6 @@ public class BrowserActivity extends Activity {
         bar.addView(go);
         top.addView(bar);
         root.addView(top);
-
-        addBar = Ui.tv(this, "Add this extension to " + accName, 14, 0xFFFFFFFF, true);
-        addBar.setGravity(Gravity.CENTER);
-        addBar.setBackground(Ui.ripple(this, Ui.gradient(this, Ui.ACCENT, Ui.ACCENT_B, 0), 0));
-        addBar.setPadding(dp(14), dp(12), dp(14), dp(12));
-        addBar.setVisibility(View.GONE);
-        addBar.setOnClickListener(v -> {
-            String id = Extensions.storeId(lastUrl);
-            String ttl = cur == null ? "" : cur.web.getTitle();
-            if (id != null) confirmAdd(id, ttl == null ? "" : ttl.replace(" - Chrome Web Store", "").trim());
-        });
-        root.addView(addBar);
 
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
@@ -180,7 +162,6 @@ public class BrowserActivity extends Activity {
                 if (cur != null) cur.web.loadUrl(u);
             });
         });
-        extBtn.setOnClickListener(v -> showExtensions());
         plus.setOnClickListener(v -> {
             if (tabs.size() >= MAX_TABS) {
                 Toast.makeText(this, "Up to " + MAX_TABS + " tabs", Toast.LENGTH_SHORT).show();
@@ -216,7 +197,6 @@ public class BrowserActivity extends Activity {
         // Remove the WebView marker so sign-in pages (e.g. Google) behave like normal Chrome
         s.setUserAgentString(s.getUserAgentString().replace("; wv", "").replace("Version/4.0 ", ""));
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
-        w.addJavascriptInterface(new Bridge(), "AccExt");
 
         w.setWebViewClient(new WebViewClient() {
             @Override
@@ -227,23 +207,11 @@ public class BrowserActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView v, String u, Bitmap f) {
-                if (t == cur && !u.equals("about:blank")) {
-                    url.setText(u);
-                    updateAddBar(u);
-                }
-            }
-
-            @Override
-            public void doUpdateVisitedHistory(WebView v, String u, boolean reload) {
-                if (t == cur && u != null) updateAddBar(u);
+                if (t == cur && !u.equals("about:blank")) url.setText(u);
             }
 
             @Override
             public void onPageFinished(WebView v, String u) {
-                if (!closing) {
-                    Extensions.run(v, u, exts);
-                    if (Extensions.isStoreHost(u)) v.evaluateJavascript(Extensions.STORE_HOOK, null);
-                }
                 if (saveHistory && !closing && u != null
                         && (u.startsWith("http://") || u.startsWith("https://"))) {
                     Store.addHistory(BrowserActivity.this, accId, v.getTitle(), u);
@@ -330,7 +298,6 @@ public class BrowserActivity extends Activity {
         content.addView(t.web, new FrameLayout.LayoutParams(-1, -1));
         String u = t.web.getUrl();
         url.setText(u == null || u.equals("about:blank") ? "" : u);
-        updateAddBar(u == null ? "" : u);
         progress.setVisibility(View.INVISIBLE);
         rebuildTabs();
     }
@@ -408,117 +375,6 @@ public class BrowserActivity extends Activity {
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(ClipData.newPlainText("link", link));
         Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
-    }
-
-    // ---------- extensions (per account) ----------
-    private class Bridge {
-        @android.webkit.JavascriptInterface
-        public void addExtension(String id, String title) {
-            final String u = lastUrl;
-            if (id == null || !id.matches("[a-p]{32}") || !id.equals(Extensions.storeId(u))) return;
-            final String name = title == null ? "" : title.replace(" - Chrome Web Store", "").trim();
-            final String fid = id;
-            runOnUiThread(() -> confirmAdd(fid, name));
-        }
-    }
-
-    private void updateAddBar(String u) {
-        lastUrl = u;
-        String id = Extensions.storeId(u);
-        addBar.setVisibility(id != null && Store.validId(accId) ? View.VISIBLE : View.GONE);
-    }
-
-    private void confirmAdd(final String id, final String name) {
-        if (!Store.validId(accId)) return;
-        String n = name.isEmpty() ? "this extension" : "\"" + name + "\"";
-        Ui.dialog(this, "Add extension?",
-                "Add " + n + " to " + accName + "? It works only in this account. Only the part that changes web pages runs; toolbar buttons and background features don't work on Android.",
-                null, "Cancel", "Add", false, () -> {
-                    doAdd(id, name);
-                    return true;
-                });
-    }
-
-    private void doAdd(final String id, final String name) {
-        final Dialog ld = Ui.loading(this, "Adding extension\u2026");
-        new Thread(() -> {
-            String title, msg;
-            try {
-                msg = Extensions.install(this, accId, id, name);
-                title = "Extension added";
-                exts = Extensions.list(this, accId);
-            } catch (Exception ex) {
-                title = "Can't add this extension";
-                msg = String.valueOf(ex.getMessage());
-            }
-            final String t = title, m = msg;
-            runOnUiThread(() -> {
-                ld.dismiss();
-                Ui.message(this, t, m);
-            });
-        }).start();
-    }
-
-    private void showExtensions() {
-        if (!Store.validId(accId)) return;
-        exts = Extensions.list(this, accId);
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        if (exts.isEmpty()) {
-            body.addView(Ui.tv(this, "No extensions in this account yet.", 14, Ui.MUTED, false));
-        }
-        final Dialog[] ref = new Dialog[1];
-        for (final JSONObject e : exts) {
-            LinearLayout r = new LinearLayout(this);
-            r.setGravity(Gravity.CENTER_VERTICAL);
-            r.setBackground(Ui.card(this, Ui.PANEL2, 12));
-            r.setPadding(dp(12), dp(8), dp(8), dp(8));
-            LinearLayout col = new LinearLayout(this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            TextView nm = Ui.tv(this, e.optString("name"), 14, Ui.FG, true);
-            nm.setSingleLine(true);
-            nm.setEllipsize(TextUtils.TruncateAt.END);
-            String ver = e.optString("version");
-            col.addView(nm);
-            if (!ver.isEmpty()) col.addView(Ui.tv(this, "Version " + ver, 11, Ui.MUTED, false));
-            r.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
-            Switch sw = new Switch(this);
-            sw.setChecked(e.optBoolean("on", true));
-            sw.setThumbTintList(android.content.res.ColorStateList.valueOf(0xFFFFFFFF));
-            sw.setTrackTintList(new android.content.res.ColorStateList(
-                    new int[][]{{android.R.attr.state_checked}, {}},
-                    new int[]{Ui.ACCENT, 0xFF3A3A50}));
-            final String eid = e.optString("id");
-            sw.setOnCheckedChangeListener((v, on) -> {
-                try {
-                    Extensions.setOn(this, accId, eid, on);
-                    exts = Extensions.list(this, accId);
-                } catch (Exception ex) {
-                    Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
-                }
-            });
-            r.addView(sw);
-            TextView del = Ui.tv(this, "\u00D7", 22, Ui.DANGER, false);
-            del.setPadding(dp(12), 0, dp(8), 0);
-            del.setOnClickListener(v -> {
-                try {
-                    Extensions.remove(this, accId, eid);
-                    exts = Extensions.list(this, accId);
-                } catch (Exception ex) {
-                    Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
-                }
-                if (ref[0] != null) ref[0].dismiss();
-                showExtensions();
-            });
-            r.addView(del);
-            body.addView(r, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 8));
-        }
-        ref[0] = Ui.dialog(this, "Extensions \u00B7 " + accName,
-                "Open an extension on the Chrome Web Store and tap its Add button. It is added only to this account. VPN tools and toolbar-only extensions can't run on Android.",
-                body, "Close", "Open Web Store", false, () -> {
-                    if (cur != null) cur.web.loadUrl("https://chromewebstore.google.com");
-                    return true;
-                });
     }
 
     // ---------- navigation / close ----------

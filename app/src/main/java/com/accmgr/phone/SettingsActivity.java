@@ -250,9 +250,9 @@ public class SettingsActivity extends android.app.Activity {
         usageBox.removeAllViews();
         usageBox.addView(Ui.tv(this, "Total data on this phone", 12, Ui.MUTED, false));
         usageBox.addView(Ui.tv(this, Ui.size(u.total), 28, Ui.FG, true));
-        long[] v = {u.sessions, u.history, u.ext, u.cache, u.other};
-        int[] col = {Ui.ACCENT, Ui.ACCENT_B, Ui.GREEN, Ui.WARN, 0xFF5A5A72};
-        String[] nm = {"Accounts & saved logins", "Browsing history", "Extensions",
+        long[] v = {u.sessions, u.history, u.cache, u.other};
+        int[] col = {Ui.ACCENT, Ui.ACCENT_B, Ui.WARN, 0xFF5A5A72};
+        String[] nm = {"Accounts & saved logins", "Browsing history",
                 "Cache (safe to clear)", "Other (browser engine, system)"};
         LinearLayout bar = new LinearLayout(this);
         bar.setBackground(Ui.rounded(this, Ui.BORDER, 4));

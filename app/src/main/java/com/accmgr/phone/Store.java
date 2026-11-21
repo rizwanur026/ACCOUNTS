@@ -58,14 +58,6 @@ final class Store {
         return f;
     }
 
-    static File extDir(Context c) {
-        File f = new File(c.getFilesDir(), "extensions");
-        f.mkdirs();
-        return f;
-    }
-
-    static File extFile(Context c, String id) { return new File(extDir(c), id + ".json"); }
-
     static File sessionFile(Context c, String id) { return new File(sessions(c), id + ".zip"); }
 
     static File histFile(Context c, String id) { return new File(histDir(c), id + ".json"); }
@@ -178,7 +170,6 @@ final class Store {
             saveAccounts(c, keep);
             sessionFile(c, id).delete();
             histFile(c, id).delete();
-            extFile(c, id).delete();
         }
     }
 
@@ -190,7 +181,6 @@ final class Store {
             new File(c.getFilesDir(), "accounts.bak").delete();
             deleteRec(sessions(c));
             deleteRec(histDir(c));
-            deleteRec(extDir(c));
             wipeWeb(c);
             c.getSharedPreferences("cfg", Context.MODE_PRIVATE).edit()
                     .remove("pending_id").remove("pending_name").commit();
@@ -346,7 +336,7 @@ final class Store {
 
     // ---------- data usage report ----------
     static final class Usage {
-        long total, sessions, history, ext, cache, other, apk;
+        long total, sessions, history, cache, other, apk;
         List<String> names = new ArrayList<>();
         List<Long> sizes = new ArrayList<>();
     }
@@ -356,14 +346,13 @@ final class Store {
         u.total = sizeOf(new File(c.getApplicationInfo().dataDir));
         u.sessions = sizeOf(sessions(c));
         u.history = sizeOf(histDir(c));
-        u.ext = sizeOf(extDir(c));
         u.cache = cacheSize(c, true);
-        u.other = Math.max(0, u.total - u.sessions - u.history - u.ext - u.cache);
+        u.other = Math.max(0, u.total - u.sessions - u.history - u.cache);
         u.apk = new File(c.getApplicationInfo().sourceDir).length();
         for (JSONObject a : accounts(c)) {
             String id = a.optString("id");
             u.names.add(a.optString("name"));
-            u.sizes.add(sizeOf(sessionFile(c, id)) + sizeOf(histFile(c, id)) + sizeOf(extFile(c, id)));
+            u.sizes.add(sizeOf(sessionFile(c, id)) + sizeOf(histFile(c, id)));
         }
         return u;
     }
@@ -442,7 +431,6 @@ final class Store {
                 if (!validId(id)) continue;
                 putFile(z, "sessions/" + id + ".zip", sessionFile(c, id));
                 putFile(z, "history/" + id + ".json", histFile(c, id));
-                putFile(z, "extensions/" + id + ".json", extFile(c, id));
             }
         } finally {
             z.close();
@@ -474,8 +462,7 @@ final class Store {
     private static boolean allowedEntry(String n) {
         return n.equals("accounts.json") || n.equals("meta.json")
                 || n.matches("sessions/[A-Za-z0-9_\\-]{1,64}\\.zip")
-                || n.matches("history/[A-Za-z0-9_\\-]{1,64}\\.json")
-                || n.matches("extensions/[A-Za-z0-9_\\-]{1,64}\\.json");
+                || n.matches("history/[A-Za-z0-9_\\-]{1,64}\\.json");
     }
 
     /** Returns how many accounts were restored. */
@@ -533,7 +520,6 @@ final class Store {
                     if (!validId(id) || name.isEmpty()) continue;
                     move(new File(tmp, "sessions/" + id + ".zip"), sessionFile(c, id));
                     move(new File(tmp, "history/" + id + ".json"), histFile(c, id));
-                    move(new File(tmp, "extensions/" + id + ".json"), extFile(c, id));
                     JSONObject n = new JSONObject();
                     n.put("id", id);
                     n.put("name", name);
