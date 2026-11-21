@@ -12,6 +12,11 @@ android {
         targetSdk 34
         versionCode Integer.parseInt((project.findProperty("vc") ?: "1").toString())
         versionName "2.0." + (project.findProperty("vc") ?: "1")
+        // Which GitHub repo to look at for updates (filled in by the build workflow)
+        buildConfigField "String", "GH_REPO", "\"" + (project.findProperty("ghRepo") ?: "") + "\""
+    }
+    buildFeatures {
+        buildConfig true
     }
     signingConfigs {
         stable {

@@ -1,13 +1,16 @@
 package com.accmgr.phone;
 
 import android.app.Activity;
+import android.app.Dialog;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
+import android.net.Uri;
 import android.os.Build;
+import android.widget.TextView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -23,14 +26,15 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
-/** Optional in-app updates from GitHub Releases (repo + token set in Settings). */
+/** Automatic updates from the public GitHub Releases of this project. No repo or token to type. */
 final class Updater {
     private Updater() {}
 
     interface Cb { void result(String tag, String assetUrl, String message); }
-    interface Msg { void say(String message); }
 
     private static volatile boolean busy = false;
+
+    static boolean enabled() { return !BuildConfig.GH_REPO.isEmpty(); }
 
     static long installedCode(Context c) {
         try {
@@ -41,39 +45,30 @@ final class Updater {
         }
     }
 
-    private static byte[] readAll(InputStream in) throws IOException {
-        ByteArrayOutputStream b = new ByteArrayOutputStream();
-        Store.copy(in, b);
-        in.close();
-        return b.toByteArray();
-    }
-
-    /** Runs on a background thread; the callback is invoked from that thread. */
+    /** Checks GitHub in the background. The callback runs on that background thread. */
     static void check(Context c, final boolean manual, final Cb cb) {
-        final SharedPreferences sp = c.getSharedPreferences("cfg", Context.MODE_PRIVATE);
-        final String repo = sp.getString("gh_repo", "").trim();
-        final String tk = sp.getString("gh_token", "").trim();
         final long installed = installedCode(c);
-        if (repo.isEmpty() || tk.isEmpty()) {
-            if (manual) cb.result(null, null, "Add your GitHub repo and token first.");
+        if (!enabled()) {
+            if (manual) cb.result(null, null, "Updates are not set up in this build.");
             return;
         }
         new Thread(() -> {
             try {
                 HttpURLConnection h = (HttpURLConnection) new URL(
-                        "https://api.github.com/repos/" + repo + "/releases/latest").openConnection();
+                        "https://api.github.com/repos/" + BuildConfig.GH_REPO + "/releases/latest").openConnection();
                 h.setConnectTimeout(10000);
                 h.setReadTimeout(20000);
-                h.setRequestProperty("Authorization", "Bearer " + tk);
                 h.setRequestProperty("Accept", "application/vnd.github+json");
                 h.setRequestProperty("User-Agent", "Accounts");
                 int code = h.getResponseCode();
-                if (code == 404 || code == 401 || code == 403) {
-                    if (manual) cb.result(null, null, "Update check failed (" + code + "). Check repo and token.");
+                if (code == 404) {
+                    if (manual) cb.result(null, null, "No update found. The GitHub repo must be public.");
                     return;
                 }
                 if (code != 200) throw new IOException("GitHub " + code);
-                JSONObject j = new JSONObject(new String(readAll(h.getInputStream()), StandardCharsets.UTF_8));
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                Store.copy(h.getInputStream(), b);
+                JSONObject j = new JSONObject(new String(b.toByteArray(), StandardCharsets.UTF_8));
                 String tag = j.optString("tag_name");
                 int tagNum = Integer.parseInt(tag.replaceAll("[^0-9]", ""));
                 String assetUrl = null;
@@ -82,76 +77,99 @@ final class Updater {
                     for (int k = 0; k < assets.length(); k++) {
                         JSONObject a = assets.getJSONObject(k);
                         if (a.optString("name").endsWith(".apk")) {
-                            assetUrl = a.optString("url");
+                            assetUrl = a.optString("browser_download_url");
                             break;
                         }
                     }
                 }
-                if (assetUrl != null && tagNum > installed) {
-                    cb.result(tag, assetUrl, "Update " + tag + " is ready.");
-                } else if (manual) {
-                    cb.result(null, null, "You have the latest version.");
-                }
+                if (assetUrl != null && tagNum > installed) cb.result(tag, assetUrl, "Update " + tag + " is ready.");
+                else if (manual) cb.result(null, null, "You have the latest version.");
             } catch (Exception e) {
-                if (manual) cb.result(null, null, "Update check error: " + e.getMessage());
+                if (manual) cb.result(null, null, "Couldn't check for updates: " + e.getMessage());
             }
         }).start();
     }
 
-    private static byte[] download(String assetUrl, String tk) throws IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(assetUrl).openConnection();
-        c.setInstanceFollowRedirects(false);
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(120000);
-        c.setRequestProperty("Authorization", "Bearer " + tk);
-        c.setRequestProperty("Accept", "application/octet-stream");
-        c.setRequestProperty("User-Agent", "Accounts");
-        int code = c.getResponseCode();
-        if (code >= 300 && code < 400) {
-            String loc = c.getHeaderField("Location");
-            c.disconnect();
-            HttpURLConnection d = (HttpURLConnection) new URL(loc).openConnection();
-            d.setConnectTimeout(15000);
-            d.setReadTimeout(120000);
-            if (d.getResponseCode() != 200) throw new IOException("Download " + d.getResponseCode());
-            return readAll(d.getInputStream());
-        }
-        if (code != 200) throw new IOException("Download " + code);
-        return readAll(c.getInputStream());
+    /** Pop-up: "Update available" with Update now / Later. */
+    static void prompt(final Activity a, String tag, final String assetUrl) {
+        Ui.dialog(a, "Update available",
+                "Version " + tag + " is ready. Accounts will download it and ask you to confirm the install. Your accounts and logins stay as they are.",
+                null, "Later", "Update now", false, () -> {
+                    install(a, assetUrl);
+                    return true;
+                });
     }
 
-    static void install(final Activity a, final String assetUrl, final Msg msg) {
+    static void install(final Activity a, final String assetUrl) {
         if (assetUrl == null || busy) return;
-        final SharedPreferences sp = a.getSharedPreferences("cfg", Context.MODE_PRIVATE);
-        if (sp.getString("pending_id", null) != null) {
-            msg.say("Let the last session finish saving first, then update.");
+        SharedPreferences sp = a.getSharedPreferences("cfg", Context.MODE_PRIVATE);
+        if (sp.getString("pending_id", null) != null || Store.browserRunning(a)) {
+            Ui.message(a, "Close the browser first", "Use \"Save & close\" in the open account, then update.");
             return;
         }
         if (Build.VERSION.SDK_INT >= 26 && !a.getPackageManager().canRequestPackageInstalls()) {
-            msg.say("Allow \"Install unknown apps\" for Accounts, then tap again.");
-            a.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    android.net.Uri.parse("package:" + a.getPackageName())));
+            Ui.dialog(a, "Allow installing updates",
+                    "Android needs your permission once. Tap Allow, switch on \"Allow from this source\", then come back and tap Update again.",
+                    null, "Cancel", "Allow", false, () -> {
+                        a.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + a.getPackageName())));
+                        return true;
+                    });
             return;
         }
-        final String tk = sp.getString("gh_token", "").trim();
         busy = true;
-        msg.say("Downloading update\u2026");
+        final Dialog ld = Ui.loading(a, "Downloading update\u2026 0%");
+        final TextView label = ld.findViewById(android.R.id.text1);
         new Thread(() -> {
             try {
-                byte[] apk = download(assetUrl, tk);
                 File dir = new File(a.getFilesDir(), "update");
                 dir.mkdirs();
                 File f = new File(dir, "update.apk");
-                FileOutputStream fo = new FileOutputStream(f);
-                fo.write(apk);
-                fo.close();
+                download(assetUrl, f, pct -> a.runOnUiThread(() -> label.setText("Downloading update\u2026 " + pct + "%")));
+                a.runOnUiThread(() -> label.setText("Installing\u2026"));
                 installApk(a, f);
-                msg.say("Tap \"Update\" in the system dialog to finish.");
-            } catch (Exception ex) {
-                msg.say("Update error: " + ex.getMessage());
+                a.runOnUiThread(ld::dismiss);
+            } catch (final Exception ex) {
+                a.runOnUiThread(() -> {
+                    ld.dismiss();
+                    Ui.message(a, "Update failed", String.valueOf(ex.getMessage()));
+                });
             }
             busy = false;
         }).start();
+    }
+
+    private interface Progress { void pct(int p); }
+
+    private static void download(String url, File out, Progress pr) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setInstanceFollowRedirects(true);
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(60000);
+        c.setRequestProperty("User-Agent", "Accounts");
+        if (c.getResponseCode() != 200) throw new IOException("Download " + c.getResponseCode());
+        long total = c.getContentLengthLong();
+        InputStream in = c.getInputStream();
+        FileOutputStream fo = new FileOutputStream(out);
+        try {
+            byte[] buf = new byte[32768];
+            long got = 0;
+            int n, last = -1;
+            while ((n = in.read(buf)) != -1) {
+                fo.write(buf, 0, n);
+                got += n;
+                if (total > 0) {
+                    int p = (int) (got * 100 / total);
+                    if (p != last) {
+                        last = p;
+                        pr.pct(p);
+                    }
+                }
+            }
+        } finally {
+            fo.close();
+            in.close();
+        }
     }
 
     private static void installApk(Context c, File apk) throws IOException {
@@ -168,7 +186,7 @@ final class Updater {
             s.fsync(out);
             out.close();
             Intent it = new Intent(c, UpdateReceiver.class);
-            it.setAction("com.accmgr.phone.INSTALL_RESULT");
+            it.setAction("com.accounts.vault.INSTALL_RESULT");
             PendingIntent pend = PendingIntent.getBroadcast(c, id, it,
                     PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             s.commit(pend.getIntentSender());

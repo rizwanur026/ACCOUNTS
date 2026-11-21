@@ -30,7 +30,7 @@ import java.util.List;
 
 public class MainActivity extends Activity {
     private SharedPreferences sp;
-    private TextView sub, linkBar, updateBar, pendingBar, emptyTitle, emptyText;
+    private TextView sub, linkBar, pendingBar, emptyTitle, emptyText;
     private EditText search;
     private ListView list;
     private LinearLayout emptyBox;
@@ -38,7 +38,7 @@ public class MainActivity extends Activity {
     private List<JSONObject> all = new ArrayList<>();
     private final List<JSONObject> shown = new ArrayList<>();
     private volatile boolean busy = false;
-    private String pendingUrl, updAssetUrl;
+    private String pendingUrl;
 
     private int dp(int v) { return Ui.dp(this, v); }
 
@@ -94,16 +94,13 @@ public class MainActivity extends Activity {
 
         // ----- banners -----
         linkBar = banner(Ui.ACCENT, Ui.ACCENT_B);
-        updateBar = banner(Ui.ACCENT, Ui.ACCENT_B);
         pendingBar = banner(0xFFFFA63D, 0xFFFF7A5C);
         root.addView(linkBar, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
-        root.addView(updateBar, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
         root.addView(pendingBar, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
         linkBar.setOnClickListener(v -> {
             pendingUrl = null;
             linkBar.setVisibility(View.GONE);
         });
-        updateBar.setOnClickListener(v -> Updater.install(this, updAssetUrl, this::info));
         pendingBar.setOnClickListener(v -> finishPending());
 
         // ----- list + empty state -----
@@ -176,11 +173,7 @@ public class MainActivity extends Activity {
 
         handleIntent(getIntent());
         Updater.check(this, false, (tag, url, msg) -> runOnUiThread(() -> {
-            if (tag != null) {
-                updAssetUrl = url;
-                updateBar.setText("Update " + tag + " is ready \u2014 tap to install");
-                updateBar.setVisibility(View.VISIBLE);
-            }
+            if (tag != null && !isFinishing()) Updater.prompt(this, tag, url);
         }));
     }
 

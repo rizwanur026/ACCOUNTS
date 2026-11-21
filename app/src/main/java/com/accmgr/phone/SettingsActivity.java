@@ -30,11 +30,8 @@ import java.util.Locale;
 public class SettingsActivity extends android.app.Activity {
     private static final int REQ_IMPORT = 41;
     private SharedPreferences sp;
-    private TextView cacheSub, updStatus;
+    private TextView cacheSub, updSub;
     private LinearLayout usageBox;
-    private EditText ghRepo, ghToken;
-    private String updAssetUrl;
-    private Button installBtn;
 
     private int dp(int v) { return Ui.dp(this, v); }
 
@@ -108,36 +105,12 @@ public class SettingsActivity extends android.app.Activity {
         // ----- Updates -----
         root.addView(section("APP UPDATES"));
         LinearLayout up = card();
-        up.setPadding(dp(16), dp(14), dp(16), dp(16));
-        ghRepo = Ui.field(this, "GitHub repo (owner/repo)");
-        ghRepo.setText(sp.getString("gh_repo", ""));
-        ghToken = Ui.field(this, "GitHub token");
-        ghToken.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        ghToken.setText(sp.getString("gh_token", ""));
-        up.addView(ghRepo, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
-        up.addView(ghToken, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 12));
-        LinearLayout ur = new LinearLayout(this);
-        ur.setGravity(Gravity.CENTER_VERTICAL);
-        Button check = Ui.button(this, "Check for updates", false, false);
-        installBtn = Ui.button(this, "Install", true, false);
-        installBtn.setVisibility(View.GONE);
-        ur.addView(check);
-        ur.addView(installBtn, Ui.lp(this, -2, -2, 0f, 8, 0, 0, 0));
-        up.addView(ur);
-        updStatus = Ui.tv(this, "Installed version: " + Updater.installedCode(this), 12, Ui.MUTED, false);
-        up.addView(updStatus, Ui.lp(this, -2, -2, 0f, 2, 10, 0, 0));
+        View updRow = row("Check for updates",
+                Updater.enabled() ? "Version " + versionName() : "Updates are not set up in this build",
+                v -> checkUpdate());
+        updSub = (TextView) updRow.getTag();
+        up.addView(updRow);
         root.addView(up);
-        check.setOnClickListener(v -> {
-            saveUpdateFields();
-            updStatus.setText("Checking\u2026");
-            Updater.check(this, true, (tag, url, msg) -> runOnUiThread(() -> {
-                updStatus.setText(msg);
-                updAssetUrl = url;
-                installBtn.setVisibility(tag != null ? View.VISIBLE : View.GONE);
-            }));
-        });
-        installBtn.setOnClickListener(v -> Updater.install(this, updAssetUrl,
-                m -> runOnUiThread(() -> updStatus.setText(m))));
 
         // ----- Danger -----
         root.addView(section("DANGER ZONE"));
@@ -169,15 +142,13 @@ public class SettingsActivity extends android.app.Activity {
         refreshSizes();
     }
 
-    @Override
-    protected void onPause() {
-        super.onPause();
-        saveUpdateFields();
-    }
-
-    private void saveUpdateFields() {
-        sp.edit().putString("gh_repo", ghRepo.getText().toString().trim())
-                .putString("gh_token", ghToken.getText().toString().trim()).apply();
+    private void checkUpdate() {
+        if (!Updater.enabled()) return;
+        updSub.setText("Checking\u2026");
+        Updater.check(this, true, (tag, url, msg) -> runOnUiThread(() -> {
+            updSub.setText(tag != null ? "Update " + tag + " is available" : msg);
+            if (tag != null) Updater.prompt(this, tag, url);
+        }));
     }
 
     private String versionName() {

@@ -264,7 +264,9 @@ final class Ui {
         ProgressBar pb = new ProgressBar(c);
         pb.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
         box.addView(pb, new LinearLayout.LayoutParams(dp(c, 28), dp(c, 28)));
-        box.addView(tv(c, msg, 15, FG, false), lp(c, -2, -2, 0f, 16, 0, 0, 0));
+        TextView lt = tv(c, msg, 15, FG, false);
+        lt.setId(android.R.id.text1);
+        box.addView(lt, lp(c, -2, -2, 0f, 16, 0, 0, 0));
         d.setContentView(box);
         Window w = d.getWindow();
         if (w != null) w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));

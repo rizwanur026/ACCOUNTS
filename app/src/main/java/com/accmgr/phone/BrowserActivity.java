@@ -49,8 +49,6 @@ import java.util.List;
 
 public class BrowserActivity extends Activity {
     private static final int MAX_TABS = 8;
-    private static final int REQ_EXT_FILE = 51;
-    private static final int MAX_SCRIPT = 1000000;
 
     private static class Tab {
         WebView web;
@@ -64,6 +62,9 @@ public class BrowserActivity extends Activity {
     private EditText url;
     private ProgressBar progress;
     private boolean closing = false;
+    private volatile String lastUrl = "";
+    private volatile List<JSONObject> exts = new ArrayList<>();
+    private TextView addBar;
     private boolean saveHistory = true;
     private String accId, accName;
 
@@ -76,6 +77,7 @@ public class BrowserActivity extends Activity {
         accName = getIntent().getStringExtra("name");
         String email = getIntent().getStringExtra("email");
         saveHistory = getIntent().getBooleanExtra("history", true) && Store.validId(accId);
+        if (Store.validId(accId)) exts = Extensions.list(this, accId);
 
         getWindow().setStatusBarColor(Ui.PANEL);
         getWindow().setNavigationBarColor(Ui.BG);
@@ -142,6 +144,18 @@ public class BrowserActivity extends Activity {
         top.addView(bar);
         root.addView(top);
 
+        addBar = Ui.tv(this, "Add this extension to " + accName, 14, 0xFFFFFFFF, true);
+        addBar.setGravity(Gravity.CENTER);
+        addBar.setBackground(Ui.ripple(this, Ui.gradient(this, Ui.ACCENT, Ui.ACCENT_B, 0), 0));
+        addBar.setPadding(dp(14), dp(12), dp(14), dp(12));
+        addBar.setVisibility(View.GONE);
+        addBar.setOnClickListener(v -> {
+            String id = Extensions.storeId(lastUrl);
+            String ttl = cur == null ? "" : cur.web.getTitle();
+            if (id != null) confirmAdd(id, ttl == null ? "" : ttl.replace(" - Chrome Web Store", "").trim());
+        });
+        root.addView(addBar);
+
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setProgressTintList(android.content.res.ColorStateList.valueOf(Ui.ACCENT));
@@ -202,6 +216,7 @@ public class BrowserActivity extends Activity {
         // Remove the WebView marker so sign-in pages (e.g. Google) behave like normal Chrome
         s.setUserAgentString(s.getUserAgentString().replace("; wv", "").replace("Version/4.0 ", ""));
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
+        w.addJavascriptInterface(new Bridge(), "AccExt");
 
         w.setWebViewClient(new WebViewClient() {
             @Override
@@ -212,12 +227,23 @@ public class BrowserActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView v, String u, Bitmap f) {
-                if (t == cur && !u.equals("about:blank")) url.setText(u);
+                if (t == cur && !u.equals("about:blank")) {
+                    url.setText(u);
+                    updateAddBar(u);
+                }
+            }
+
+            @Override
+            public void doUpdateVisitedHistory(WebView v, String u, boolean reload) {
+                if (t == cur && u != null) updateAddBar(u);
             }
 
             @Override
             public void onPageFinished(WebView v, String u) {
-                if (!closing) Extensions.run(BrowserActivity.this, accId, v, u);
+                if (!closing) {
+                    Extensions.run(v, u, exts);
+                    if (Extensions.isStoreHost(u)) v.evaluateJavascript(Extensions.STORE_HOOK, null);
+                }
                 if (saveHistory && !closing && u != null
                         && (u.startsWith("http://") || u.startsWith("https://"))) {
                     Store.addHistory(BrowserActivity.this, accId, v.getTitle(), u);
@@ -304,6 +330,7 @@ public class BrowserActivity extends Activity {
         content.addView(t.web, new FrameLayout.LayoutParams(-1, -1));
         String u = t.web.getUrl();
         url.setText(u == null || u.equals("about:blank") ? "" : u);
+        updateAddBar(u == null ? "" : u);
         progress.setVisibility(View.INVISIBLE);
         rebuildTabs();
     }
@@ -384,16 +411,64 @@ public class BrowserActivity extends Activity {
     }
 
     // ---------- extensions (per account) ----------
+    private class Bridge {
+        @android.webkit.JavascriptInterface
+        public void addExtension(String id, String title) {
+            final String u = lastUrl;
+            if (id == null || !id.matches("[a-p]{32}") || !id.equals(Extensions.storeId(u))) return;
+            final String name = title == null ? "" : title.replace(" - Chrome Web Store", "").trim();
+            final String fid = id;
+            runOnUiThread(() -> confirmAdd(fid, name));
+        }
+    }
+
+    private void updateAddBar(String u) {
+        lastUrl = u;
+        String id = Extensions.storeId(u);
+        addBar.setVisibility(id != null && Store.validId(accId) ? View.VISIBLE : View.GONE);
+    }
+
+    private void confirmAdd(final String id, final String name) {
+        if (!Store.validId(accId)) return;
+        String n = name.isEmpty() ? "this extension" : "\"" + name + "\"";
+        Ui.dialog(this, "Add extension?",
+                "Add " + n + " to " + accName + "? It works only in this account. Only the part that changes web pages runs; toolbar buttons and background features don't work on Android.",
+                null, "Cancel", "Add", false, () -> {
+                    doAdd(id, name);
+                    return true;
+                });
+    }
+
+    private void doAdd(final String id, final String name) {
+        final Dialog ld = Ui.loading(this, "Adding extension\u2026");
+        new Thread(() -> {
+            String title, msg;
+            try {
+                msg = Extensions.install(this, accId, id, name);
+                title = "Extension added";
+                exts = Extensions.list(this, accId);
+            } catch (Exception ex) {
+                title = "Can't add this extension";
+                msg = String.valueOf(ex.getMessage());
+            }
+            final String t = title, m = msg;
+            runOnUiThread(() -> {
+                ld.dismiss();
+                Ui.message(this, t, m);
+            });
+        }).start();
+    }
+
     private void showExtensions() {
         if (!Store.validId(accId)) return;
-        final List<JSONObject> list = Extensions.list(this, accId);
+        exts = Extensions.list(this, accId);
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        if (list.isEmpty()) {
-            body.addView(Ui.tv(this, "No extensions yet for this account.", 14, Ui.MUTED, false));
+        if (exts.isEmpty()) {
+            body.addView(Ui.tv(this, "No extensions in this account yet.", 14, Ui.MUTED, false));
         }
         final Dialog[] ref = new Dialog[1];
-        for (final JSONObject e : list) {
+        for (final JSONObject e : exts) {
             LinearLayout r = new LinearLayout(this);
             r.setGravity(Gravity.CENTER_VERTICAL);
             r.setBackground(Ui.card(this, Ui.PANEL2, 12));
@@ -403,13 +478,9 @@ public class BrowserActivity extends Activity {
             TextView nm = Ui.tv(this, e.optString("name"), 14, Ui.FG, true);
             nm.setSingleLine(true);
             nm.setEllipsize(TextUtils.TruncateAt.END);
-            String m = e.optString("match").trim();
-            TextView ms = Ui.tv(this, m.isEmpty() || m.equals("*") ? "All sites" : m.replace("\n", ", "),
-                    11, Ui.MUTED, false);
-            ms.setSingleLine(true);
-            ms.setEllipsize(TextUtils.TruncateAt.END);
+            String ver = e.optString("version");
             col.addView(nm);
-            col.addView(ms);
+            if (!ver.isEmpty()) col.addView(Ui.tv(this, "Version " + ver, 11, Ui.MUTED, false));
             r.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
             Switch sw = new Switch(this);
             sw.setChecked(e.optBoolean("on", true));
@@ -421,6 +492,7 @@ public class BrowserActivity extends Activity {
             sw.setOnCheckedChangeListener((v, on) -> {
                 try {
                     Extensions.setOn(this, accId, eid, on);
+                    exts = Extensions.list(this, accId);
                 } catch (Exception ex) {
                     Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -431,6 +503,7 @@ public class BrowserActivity extends Activity {
             del.setOnClickListener(v -> {
                 try {
                     Extensions.remove(this, accId, eid);
+                    exts = Extensions.list(this, accId);
                 } catch (Exception ex) {
                     Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -441,127 +514,11 @@ public class BrowserActivity extends Activity {
             body.addView(r, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 8));
         }
         ref[0] = Ui.dialog(this, "Extensions \u00B7 " + accName,
-                "JavaScript user scripts that run only in this account. Chrome Web Store extensions (.crx) can't run on Android. Add scripts you trust only. On/off changes apply from the next page load.",
-                body, "Close", "Add", false, () -> {
-                    addMenu();
+                "Open an extension on the Chrome Web Store and tap its Add button. It is added only to this account. VPN tools and toolbar-only extensions can't run on Android.",
+                body, "Close", "Open Web Store", false, () -> {
+                    if (cur != null) cur.web.loadUrl("https://chromewebstore.google.com");
                     return true;
                 });
-    }
-
-    private void addMenu() {
-        Ui.menu(this, "Add extension", new String[]{"Paste code", "Import from file", "Add from link"}, -1, i -> {
-            if (i == 0) scriptForm(null);
-            else if (i == 1) {
-                Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-                it.addCategory(Intent.CATEGORY_OPENABLE);
-                it.setType("*/*");
-                startActivityForResult(it, REQ_EXT_FILE);
-            } else linkForm();
-        });
-    }
-
-    private void scriptForm(String prefill) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        final EditText name = Ui.field(this, "Name (optional)");
-        final EditText match = Ui.field(this, "Sites, e.g. *://mail.google.com/*  (empty = all)");
-        match.setTextSize(13);
-        final EditText code = Ui.field(this, "JavaScript code");
-        code.setSingleLine(false);
-        code.setMinLines(6);
-        code.setMaxLines(10);
-        code.setGravity(Gravity.TOP);
-        code.setTypeface(Typeface.MONOSPACE);
-        code.setTextSize(12);
-        code.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        if (prefill != null) {
-            code.setText(prefill);
-            String[] m = Extensions.meta(prefill);
-            name.setText(m[0]);
-            match.setText(m[1]);
-        }
-        box.addView(name, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
-        box.addView(match, Ui.lp(this, -1, -2, 0f, 0, 0, 0, 10));
-        box.addView(code);
-        Ui.dialog(this, "New extension", null, box, "Cancel", "Save", false, () -> {
-            String src = code.getText().toString();
-            if (src.trim().isEmpty()) {
-                code.setError("Paste the code");
-                return false;
-            }
-            String[] m = Extensions.meta(src);
-            String nm = name.getText().toString().trim();
-            if (nm.isEmpty()) nm = m[0].isEmpty() ? "Script" : m[0];
-            String mt = match.getText().toString().trim();
-            if (mt.isEmpty()) mt = m[1];
-            try {
-                Extensions.add(this, accId, nm, mt, src);
-                if (cur != null) cur.web.reload();
-                Toast.makeText(this, "Extension added", Toast.LENGTH_SHORT).show();
-            } catch (Exception ex) {
-                Toast.makeText(this, "Error: " + ex.getMessage(), Toast.LENGTH_LONG).show();
-            }
-            return true;
-        });
-    }
-
-    private void linkForm() {
-        final EditText link = Ui.field(this, "https://\u2026/script.user.js");
-        link.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        Ui.dialog(this, "Add from link", "Paste the direct link to a .js or .user.js file.", link,
-                "Cancel", "Download", false, () -> {
-                    final String u = link.getText().toString().trim();
-                    if (!u.startsWith("https://")) {
-                        link.setError("Use an https:// link");
-                        return false;
-                    }
-                    fetchScript(u);
-                    return true;
-                });
-    }
-
-    private void fetchScript(final String u) {
-        Toast.makeText(this, "Downloading\u2026", Toast.LENGTH_SHORT).show();
-        new Thread(() -> {
-            try {
-                HttpURLConnection h = (HttpURLConnection) new URL(u).openConnection();
-                h.setConnectTimeout(10000);
-                h.setReadTimeout(20000);
-                if (h.getResponseCode() != 200) throw new Exception("HTTP " + h.getResponseCode());
-                final String text = readLimited(h.getInputStream());
-                runOnUiThread(() -> scriptForm(text));
-            } catch (final Exception ex) {
-                runOnUiThread(() -> Ui.message(this, "Download failed", String.valueOf(ex.getMessage())));
-            }
-        }).start();
-    }
-
-    private String readLimited(InputStream in) throws Exception {
-        ByteArrayOutputStream b = new ByteArrayOutputStream();
-        byte[] buf = new byte[8192];
-        int n;
-        while ((n = in.read(buf)) != -1) {
-            b.write(buf, 0, n);
-            if (b.size() > MAX_SCRIPT) throw new Exception("File is too large");
-        }
-        in.close();
-        return new String(b.toByteArray(), StandardCharsets.UTF_8);
-    }
-
-    @Override
-    protected void onActivityResult(int req, int res, Intent data) {
-        super.onActivityResult(req, res, data);
-        if (req != REQ_EXT_FILE || res != RESULT_OK || data == null || data.getData() == null) return;
-        final Uri uri = data.getData();
-        new Thread(() -> {
-            try {
-                final String text = readLimited(getContentResolver().openInputStream(uri));
-                runOnUiThread(() -> scriptForm(text));
-            } catch (final Exception ex) {
-                runOnUiThread(() -> Ui.message(this, "Couldn't read file", String.valueOf(ex.getMessage())));
-            }
-        }).start();
     }
 
     // ---------- navigation / close ----------

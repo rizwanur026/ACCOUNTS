@@ -7,11 +7,11 @@ Standalone Android app. No PC, no server, no Tailscale.
   - MainActivity     account list, search, create/edit/delete, open
   - BrowserActivity  tabs, address bar, history button, "Save & close"
   - SettingsActivity cache, history, privacy, backup/share/import, updates, erase all
-  - Extensions       per-account JavaScript user scripts (injected after page load)
+  - Extensions       Chrome Web Store extensions (page scripts only), per account
   - Store            all data: accounts, saved logins, history, cache, backup (encrypted)
   - Ui               theme, buttons, dialogs
   - ShareProvider    lets the app share backup / APK through the share sheet
-  - Updater          optional GitHub Releases updates (repo + token in Settings)
+  - Updater          automatic updates from the public GitHub Releases of this repo (no token)
 - app/keystore.p12   signing key - keep the same so updates install over the old app
 - .github/workflows/build.yml  builds the APK and publishes a Release
 
